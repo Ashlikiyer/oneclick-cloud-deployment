@@ -210,4 +210,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-Built with ❤️ by [Your Name]
+Built with ❤️ by Ashley Kier Ferreol
