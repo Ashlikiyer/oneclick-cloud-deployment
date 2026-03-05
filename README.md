@@ -2,7 +2,8 @@
 
 Deploy full-stack Next.js and Node.js applications to AWS EC2 with a single click. No manual SSH, no complex configs—just paste your GitHub URL and deploy.
 
-![Dashboard Preview](docs/dashboard-preview.png)
+<img width="1919" height="842" alt="Screenshot 2026-03-05 103504" src="https://github.com/user-attachments/assets/15059a77-7724-4567-a4cc-8fb2c6a5e812" />
+
 
 ## ✨ Features
 
