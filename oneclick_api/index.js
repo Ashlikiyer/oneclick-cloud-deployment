@@ -1,8 +1,8 @@
 /**
- * One-Click AWS Deployer - Backend Server
+ * One-Click Deployer - Backend Server
  * 
  * Express server with Socket.io for real-time updates.
- * Manages EC2 deployments via REST API.
+ * Manages deployments to Vercel and Railway via REST API.
  */
 
 require('dotenv').config();
@@ -13,33 +13,17 @@ const http = require('http');
 const { Server: SocketServer } = require('socket.io');
 
 // Import routes
-const deployRoutes = require('./routes/deploy');
-const instancesRoutes = require('./routes/instances');
-const logsRoutes = require('./routes/logs');
-
-// Import services
-const { startPolling, stopPolling, stopAllPolling, pollAllInstances } = require('./services/statusPoller');
+const authRoutes = require('./routes/auth');
+const projectsRoutes = require('./routes/projects');
+const deploymentsRoutes = require('./routes/deployments');
+const databasesRoutes = require('./routes/databases');
 
 // Environment variables
 const PORT = process.env.PORT || 4000;
 const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:3000';
 
-// Validate required environment variables
-const requiredEnvVars = [
-  'AWS_ACCESS_KEY_ID',
-  'AWS_SECRET_ACCESS_KEY',
-  'EC2_KEY_PAIR_NAME',
-  'EC2_SECURITY_GROUP_ID',
-  'EC2_AMI_ID',
-];
-
-const missingEnvVars = requiredEnvVars.filter(varName => !process.env[varName]);
-if (missingEnvVars.length > 0) {
-  console.error('❌ Missing required environment variables:');
-  missingEnvVars.forEach(varName => console.error(`   - ${varName}`));
-  console.error('\nPlease check your .env file.');
-  process.exit(1);
-}
+// Note: Vercel/Railway API tokens are provided by users per-request
+// No shared credentials needed at server startup
 
 // Initialize Express
 const app = express();
@@ -81,9 +65,10 @@ app.get('/api/health', (req, res) => {
 });
 
 // API Routes
-app.use('/api/deploy', deployRoutes);
-app.use('/api/instances', instancesRoutes);
-app.use('/api/instances', logsRoutes); // Mounts /:id/logs under /api/instances
+app.use('/api/auth', authRoutes);
+app.use('/api/projects', projectsRoutes);
+app.use('/api', deploymentsRoutes);  // Mounts /deploy/*, /deployments/*
+app.use('/api/databases', databasesRoutes);
 
 // 404 handler
 app.use((req, res) => {
@@ -117,30 +102,26 @@ io.on('connection', (socket) => {
     timestamp: new Date().toISOString(),
   });
 
-  // Send current instances list on connection
-  pollAllInstances(io).then(instances => {
-    socket.emit('instances:all', {
-      instances,
-      timestamp: new Date().toISOString(),
-    });
+  // Handle subscription to deployment updates
+  socket.on('subscribe:deployment', ({ platform, deploymentId }) => {
+    console.log(`[Socket] ${socket.id} subscribed to ${platform} deployment: ${deploymentId}`);
+    socket.join(`deployment:${platform}:${deploymentId}`);
   });
   
-  // Handle subscription to specific instance updates
-  socket.on('subscribe:instance', (instanceId) => {
-    console.log(`[Socket] ${socket.id} subscribed to instance: ${instanceId}`);
-    socket.join(`instance:${instanceId}`);
-    // Start polling this instance for updates
-    startPolling(instanceId, io);
+  socket.on('unsubscribe:deployment', ({ platform, deploymentId }) => {
+    console.log(`[Socket] ${socket.id} unsubscribed from ${platform} deployment: ${deploymentId}`);
+    socket.leave(`deployment:${platform}:${deploymentId}`);
+  });
+
+  // Handle subscription to project updates
+  socket.on('subscribe:project', ({ platform, projectId }) => {
+    console.log(`[Socket] ${socket.id} subscribed to ${platform} project: ${projectId}`);
+    socket.join(`project:${platform}:${projectId}`);
   });
   
-  socket.on('unsubscribe:instance', (instanceId) => {
-    console.log(`[Socket] ${socket.id} unsubscribed from instance: ${instanceId}`);
-    socket.leave(`instance:${instanceId}`);
-    // Check if any clients still in the room before stopping poll
-    const room = io.sockets.adapter.rooms.get(`instance:${instanceId}`);
-    if (!room || room.size === 0) {
-      stopPolling(instanceId);
-    }
+  socket.on('unsubscribe:project', ({ platform, projectId }) => {
+    console.log(`[Socket] ${socket.id} unsubscribed from ${platform} project: ${projectId}`);
+    socket.leave(`project:${platform}:${projectId}`);
   });
   
   socket.on('disconnect', () => {
@@ -157,24 +138,23 @@ server.listen(PORT, () => {
   console.log(`  🔌 WebSocket:    ws://localhost:${PORT}`);
   console.log(`  🌍 Environment:  ${process.env.NODE_ENV || 'development'}`);
   console.log(`  🔗 CORS Origin:  ${CORS_ORIGIN}`);
-  console.log(`  🌏 AWS Region:   ${process.env.AWS_REGION || 'ap-southeast-1'}`);
   console.log('========================================\n');
   console.log('Endpoints:');
-  console.log('  POST   /api/deploy           - Deploy a GitHub repo');
-  console.log('  GET    /api/instances        - List all instances');
-  console.log('  GET    /api/instances/:id    - Get instance details');
-  console.log('  PUT    /api/instances/:id/stop   - Stop instance');
-  console.log('  PUT    /api/instances/:id/start  - Start instance');
-  console.log('  DELETE /api/instances/:id    - Terminate instance');
-  console.log('  GET    /api/instances/:id/logs   - Get console logs');
-  console.log('  GET    /api/health           - Health check');
+  console.log('  POST   /api/auth/validate              - Validate platform token');
+  console.log('  GET    /api/projects/vercel            - List Vercel projects');
+  console.log('  GET    /api/projects/railway           - List Railway projects');
+  console.log('  POST   /api/deploy/vercel              - Deploy to Vercel');
+  console.log('  POST   /api/deploy/railway             - Deploy to Railway');
+  console.log('  GET    /api/deployments/vercel/:id     - Get Vercel deployments');
+  console.log('  GET    /api/deployments/railway/:id    - Get Railway deployments');
+  console.log('  POST   /api/databases/railway          - Create Railway database');
+  console.log('  GET    /api/health                     - Health check');
   console.log('\n');
 });
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
   console.log('\n[Server] SIGTERM received, shutting down gracefully...');
-  stopAllPolling();
   server.close(() => {
     console.log('[Server] HTTP server closed');
     process.exit(0);
@@ -183,7 +163,6 @@ process.on('SIGTERM', () => {
 
 process.on('SIGINT', () => {
   console.log('\n[Server] SIGINT received, shutting down gracefully...');
-  stopAllPolling();
   server.close(() => {
     console.log('[Server] HTTP server closed');
     process.exit(0);
